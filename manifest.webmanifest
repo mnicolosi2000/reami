@@ -2,7 +2,7 @@
   "name": "REAMI Setlists",
   "short_name": "REAMI",
   "description": "Professional music setlist manager",
-  "start_url": "/",
+  "start_url": "/reami/",
   "display": "standalone",
   "background_color": "#000000",
   "theme_color": "#000000",

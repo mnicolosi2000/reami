@@ -1,6 +1,6 @@
 {
-  "name": "REAMI Setlists",
-  "short_name": "REAMI",
+  "name": "SetlistStudio",
+  "short_name": "SetlistStudio",
   "description": "Professional music setlist manager",
   "start_url": "./",
   "display": "standalone",

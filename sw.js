@@ -1,4 +1,5 @@
 const CACHE_NAME = 'setlist-studio-v1';
+const API_CACHE_NAME = 'api-cache-v1';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
@@ -20,7 +21,7 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME) {
+          if (cacheName !== CACHE_NAME && cacheName !== API_CACHE_NAME) {
             return caches.delete(cacheName);
           }
         })
@@ -34,7 +35,41 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // Avoid caching Supabase/API calls and non-GET requests
+  // Handle Supabase API requests
+  const isSupabaseRequest = url.hostname.includes('supabase.co') && url.pathname.includes('/rest/v1/');
+  
+  if (isSupabaseRequest && request.method === 'GET') {
+    event.respondWith(
+      fetch(request.clone())
+        .then((response) => {
+          // If successful, cache the response
+          if (response && response.status === 200) {
+            const responseToCache = response.clone();
+            caches.open(API_CACHE_NAME).then((cache) => {
+              cache.put(request, responseToCache);
+            });
+          }
+          return response;
+        })
+        .catch(() => {
+          // If network fails (offline), try the cache
+          return caches.match(request).then((cachedResponse) => {
+            if (cachedResponse) {
+              return cachedResponse;
+            }
+            // If nothing in cache, return an empty array for list requests
+            // This prevents the app from crashing/showing generic error
+            return new Response(JSON.stringify([]), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' }
+            });
+          });
+        })
+    );
+    return;
+  }
+
+  // Handle local static assets
   if (request.method !== 'GET' || url.origin !== location.origin) {
     return;
   }

@@ -35,8 +35,9 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // Handle Supabase API requests
-  const isSupabaseRequest = url.hostname.includes('supabase.co') && url.pathname.includes('/rest/v1/');
+  // Handle Supabase API and Storage requests
+  const isSupabaseRequest = url.hostname.includes('supabase.co') && 
+    (url.pathname.includes('/rest/v1/') || url.pathname.includes('/storage/v1/object/public/'));
   
   if (isSupabaseRequest && request.method === 'GET') {
     event.respondWith(
@@ -53,16 +54,18 @@ self.addEventListener('fetch', (event) => {
         })
         .catch(() => {
           // If network fails (offline), try the cache
-          return caches.match(request).then((cachedResponse) => {
+          // For storage requests, we ignore search parameters (tokens) so we can serve the cached file
+          // even if the signature token has changed or expired while offline.
+          const matchOptions = isSupabaseRequest && url.pathname.includes('/storage/v1/object/public/') 
+            ? { ignoreSearch: true } 
+            : {};
+
+          return caches.match(request, matchOptions).then((cachedResponse) => {
             if (cachedResponse) {
               return cachedResponse;
             }
-            // If nothing in cache, return an empty array for list requests
-            // This prevents the app from crashing/showing generic error
-            return new Response(JSON.stringify([]), {
-              status: 200,
-              headers: { 'Content-Type': 'application/json' }
-            });
+            // If nothing in cache, throw so the caller's catch block can handle it (e.g. localStorage fallback)
+            throw new Error('Offline and not in cache');
           });
         })
     );

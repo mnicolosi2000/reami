@@ -1,5 +1,5 @@
-const CACHE_NAME = 'setlist-studio-v1';
-const API_CACHE_NAME = 'api-cache-v1';
+const CACHE_NAME = 'setlist-studio-v2';
+const API_CACHE_NAME = 'api-cache-v2';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',

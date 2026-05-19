@@ -44,8 +44,16 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       (async () => {
         // For Storage (PDFs/Images), use Cache-First strategy to prefer offline downloads
+        // Normalize the URL for storage to match even if signed vs public
+        let cacheMatchRequest = request;
         if (isStorageRequest) {
-          const cachedResponse = await caches.match(request, { ignoreSearch: true });
+          const normalizedPath = url.pathname.replace(/\/storage\/v1\/object\/(public|sign)\//, '/storage/v1/object/normalized/');
+          const normalizedUrl = new URL(url.href);
+          normalizedUrl.pathname = normalizedPath;
+          normalizedUrl.search = ''; // Strip all query params including tokens
+          cacheMatchRequest = new Request(normalizedUrl.toString());
+          
+          const cachedResponse = await caches.match(cacheMatchRequest);
           if (cachedResponse) {
             return cachedResponse;
           }
@@ -56,16 +64,23 @@ self.addEventListener('fetch', (event) => {
           if (response && response.status === 200) {
             const responseToCache = response.clone();
             const cache = await caches.open(API_CACHE_NAME);
-            cache.put(request, responseToCache);
+            
+            if (isStorageRequest) {
+              // Store using the normalized request as key
+              cache.put(cacheMatchRequest, responseToCache);
+            } else {
+              cache.put(request, responseToCache);
+            }
           }
           return response;
         } catch (error) {
           // Fallback if network fails
-          const matchOptions = isStorageRequest ? { ignoreSearch: true } : {};
-          const cachedResponse = await caches.match(request, matchOptions);
-          
-          if (cachedResponse) {
-            return cachedResponse;
+          if (isStorageRequest) {
+            const cachedResponse = await caches.match(cacheMatchRequest);
+            if (cachedResponse) return cachedResponse;
+          } else {
+            const cachedResponse = await caches.match(request);
+            if (cachedResponse) return cachedResponse;
           }
           
           throw new Error('Offline and not in cache');

@@ -1,5 +1,6 @@
 const CACHE_NAME = 'setlist-studio-v2';
 const API_CACHE_NAME = 'api-cache-v2';
+const OFFLINE_PDF_CACHE = 'offline-pdfs-v1';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
@@ -21,7 +22,7 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME && cacheName !== API_CACHE_NAME) {
+          if (cacheName !== CACHE_NAME && cacheName !== API_CACHE_NAME && cacheName !== OFFLINE_PDF_CACHE) {
             return caches.delete(cacheName);
           }
         })
@@ -35,7 +36,22 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // Handle Supabase API and Storage requests
+  // 1. Intercept manual offline-pdf virtual paths
+  if (url.origin === location.origin && url.pathname.startsWith('/offline-pdf/')) {
+    event.respondWith(
+      (async () => {
+        const cache = await caches.open(OFFLINE_PDF_CACHE);
+        const cachedResponse = await cache.match(request);
+        if (cachedResponse) return cachedResponse;
+        
+        // If not found in offline-pdf path, this is problematic as it's a virtual path
+        return new Response('Not found in offline storage', { status: 404 });
+      })()
+    );
+    return;
+  }
+
+  // 2. Handle Supabase API and Storage requests
   const isStorageRequest = url.hostname.includes('supabase.co') && 
     (url.pathname.includes('/storage/v1/object/public/') || url.pathname.includes('/storage/v1/object/sign/'));
   const isRestRequest = url.hostname.includes('supabase.co') && url.pathname.includes('/rest/v1/');
@@ -43,21 +59,26 @@ self.addEventListener('fetch', (event) => {
   if ((isStorageRequest || isRestRequest) && request.method === 'GET') {
     event.respondWith(
       (async () => {
-        // For Storage (PDFs/Images), use Cache-First strategy to prefer offline downloads
-        // Normalize the URL for storage to match even if signed vs public
-        let cacheMatchRequest = request;
+        // For Storage, we first try to find the file by its normalized path (song ID usually)
+        // Extract filename/path: e.g. media/parts/123-abc.pdf
+        let storageKey = '';
         if (isStorageRequest) {
-          const normalizedPath = url.pathname.replace(/\/storage\/v1\/object\/(public|sign)\//, '/storage/v1/object/normalized/');
-          const normalizedUrl = new URL(url.href);
-          normalizedUrl.pathname = normalizedPath;
-          normalizedUrl.search = ''; // Strip all query params including tokens
-          cacheMatchRequest = new Request(normalizedUrl.toString());
-          
-          const cachedResponse = await caches.match(cacheMatchRequest);
-          if (cachedResponse) {
-            return cachedResponse;
+          const parts = url.pathname.split('/');
+          const objectPath = parts.slice(parts.indexOf('object') + 3).join('/'); // Skip object/public/bucket/
+          if (objectPath) {
+            storageKey = `/offline-pdf/${objectPath}`;
+            
+            // Check the dedicated offline cache first
+            const offlineCache = await caches.open(OFFLINE_PDF_CACHE);
+            const offlineMatch = await offlineCache.match(storageKey);
+            if (offlineMatch) return offlineMatch;
           }
         }
+
+        // Normal flow: check general API cache or fetch
+        const cacheMatchRequest = isStorageRequest ? new Request(storageKey) : request;
+        const cachedResponse = await caches.match(cacheMatchRequest);
+        if (cachedResponse) return cachedResponse;
 
         try {
           const response = await fetch(request.clone());
@@ -65,23 +86,17 @@ self.addEventListener('fetch', (event) => {
             const responseToCache = response.clone();
             const cache = await caches.open(API_CACHE_NAME);
             
-            if (isStorageRequest) {
-              // Store using the normalized request as key
-              cache.put(cacheMatchRequest, responseToCache);
+            if (isStorageRequest && storageKey) {
+              cache.put(storageKey, responseToCache);
             } else {
               cache.put(request, responseToCache);
             }
           }
           return response;
         } catch (error) {
-          // Fallback if network fails
-          if (isStorageRequest) {
-            const cachedResponse = await caches.match(cacheMatchRequest);
-            if (cachedResponse) return cachedResponse;
-          } else {
-            const cachedResponse = await caches.match(request);
-            if (cachedResponse) return cachedResponse;
-          }
+          // Fallback if offline
+          const fallbackResponse = await caches.match(storageKey || request);
+          if (fallbackResponse) return fallbackResponse;
           
           throw new Error('Offline and not in cache');
         }

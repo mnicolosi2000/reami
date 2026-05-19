@@ -36,38 +36,41 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
 
   // Handle Supabase API and Storage requests
-  const isSupabaseRequest = url.hostname.includes('supabase.co') && 
-    (url.pathname.includes('/rest/v1/') || url.pathname.includes('/storage/v1/object/public/'));
+  const isStorageRequest = url.hostname.includes('supabase.co') && 
+    (url.pathname.includes('/storage/v1/object/public/') || url.pathname.includes('/storage/v1/object/sign/'));
+  const isRestRequest = url.hostname.includes('supabase.co') && url.pathname.includes('/rest/v1/');
   
-  if (isSupabaseRequest && request.method === 'GET') {
+  if ((isStorageRequest || isRestRequest) && request.method === 'GET') {
     event.respondWith(
-      fetch(request.clone())
-        .then((response) => {
-          // If successful, cache the response
+      (async () => {
+        // For Storage (PDFs/Images), use Cache-First strategy to prefer offline downloads
+        if (isStorageRequest) {
+          const cachedResponse = await caches.match(request, { ignoreSearch: true });
+          if (cachedResponse) {
+            return cachedResponse;
+          }
+        }
+
+        try {
+          const response = await fetch(request.clone());
           if (response && response.status === 200) {
             const responseToCache = response.clone();
-            caches.open(API_CACHE_NAME).then((cache) => {
-              cache.put(request, responseToCache);
-            });
+            const cache = await caches.open(API_CACHE_NAME);
+            cache.put(request, responseToCache);
           }
           return response;
-        })
-        .catch(() => {
-          // If network fails (offline), try the cache
-          // For storage requests, we ignore search parameters (tokens) so we can serve the cached file
-          // even if the signature token has changed or expired while offline.
-          const matchOptions = isSupabaseRequest && url.pathname.includes('/storage/v1/object/public/') 
-            ? { ignoreSearch: true } 
-            : {};
-
-          return caches.match(request, matchOptions).then((cachedResponse) => {
-            if (cachedResponse) {
-              return cachedResponse;
-            }
-            // If nothing in cache, throw so the caller's catch block can handle it (e.g. localStorage fallback)
-            throw new Error('Offline and not in cache');
-          });
-        })
+        } catch (error) {
+          // Fallback if network fails
+          const matchOptions = isStorageRequest ? { ignoreSearch: true } : {};
+          const cachedResponse = await caches.match(request, matchOptions);
+          
+          if (cachedResponse) {
+            return cachedResponse;
+          }
+          
+          throw new Error('Offline and not in cache');
+        }
+      })()
     );
     return;
   }

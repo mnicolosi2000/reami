@@ -5,7 +5,8 @@ const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
   '/manifest.webmanifest',
-  '/icon.png'
+  '/icon.png',
+  '/setlist_studio_logo.png'
 ];
 
 self.addEventListener('install', (event) => {
@@ -72,45 +73,46 @@ self.addEventListener('fetch', (event) => {
             const songId = objectPath.replace('parts/', '').replace('.pdf', '');
             if (songId) {
               stableKey = `/offline-pdfs/${songId}`;
-              
-              // Check the dedicated offline cache first
-              const offlineCache = await caches.open(OFFLINE_PDF_CACHE);
-              const offlineMatch = await offlineCache.match(stableKey);
-              if (offlineMatch) {
-                console.log('[SW] Storage request matched stable offline cache:', stableKey);
-                return offlineMatch;
-              }
             }
           }
         }
 
-        // Normal flow: check general API cache or fetch
-        const cachedResponse = await caches.match(request);
-        if (cachedResponse) return cachedResponse;
-
+        // Network-first strategy when online
         try {
           const response = await fetch(request.clone());
-          if (response && response.status === 200) {
+          if (response && (response.status === 200 || response.status === 206)) {
             const responseToCache = response.clone();
             const cache = await caches.open(API_CACHE_NAME);
             
-            // We also store it in the API cache using the full request URL
-            cache.put(request, responseToCache);
+            // We also store it in the API cache using the full request URL, replacing any stale version
+            await cache.put(request, responseToCache);
+            console.log('[SW] Network fetch succeeded, cached new response for:', url.pathname);
             
             // If it's a storage request, also update the stable key if we have it
             if (isStorageRequest && stableKey) {
               const stableCache = await caches.open(OFFLINE_PDF_CACHE);
-              stableCache.put(stableKey, response.clone());
+              await stableCache.put(stableKey, response.clone());
               console.log('[SW] Auto-cached storage request to stable key:', stableKey);
             }
           }
           return response;
         } catch (error) {
           // Fallback if offline
-          console.log('[SW] Offline fallback for:', url.pathname);
-          const fallbackResponse = await caches.match(stableKey || request);
+          console.log('[SW] Network fetch failed, falling back to cache:', url.pathname);
+          
+          // For Storage, see if we have it in stable cache first
+          if (isStorageRequest && stableKey) {
+            const stableCache = await caches.open(OFFLINE_PDF_CACHE);
+            const stableMatch = await stableCache.match(stableKey);
+            if (stableMatch) {
+              console.log('[SW] Storage request matched stable offline cache (fallback):', stableKey);
+              return stableMatch;
+            }
+          }
+
+          const fallbackResponse = await caches.match(request);
           if (fallbackResponse) {
-            console.log('[SW] Found fallback in cache');
+            console.log('[SW] Found fallback in API cache');
             return fallbackResponse;
           }
           
